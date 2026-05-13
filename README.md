@@ -28,7 +28,7 @@ Each demo file is self-contained: prose context, the SQL to run, the captured ou
 | # | File | Thesis subsection | Topic |
 |---|------|-------------------|-------|
 | 00 | [00_setup.md](00_setup.md) | §4.1 | Schema, populate, page layouts |
-| 01 | [01_select_zipcode.md](01_select_zipcode.md) | §4.2.1–§4.2.3 | SELECT by zipcode: parser → planner → BitmapHeapScan |
+| 01 | [01_select_zipcode.md](01_select_zipcode.md) | §4.2.1, §4.2.2, §4.2.3 | SELECT by zipcode: parser → planner → BitmapHeapScan |
 | 02 | [02_select_id_point.md](02_select_id_point.md) | §4.2.3 | SELECT by id: plain Index Scan |
 | 03 | [03_seq_scan_baseline.md](03_seq_scan_baseline.md) | §4.2.3 | Seq Scan baseline (no index on `age`) |
 | 04 | [04_buffer_pool_walkthrough.md](04_buffer_pool_walkthrough.md) | §4.2.4 | Buffer pool contents via `pg_buffercache` |
