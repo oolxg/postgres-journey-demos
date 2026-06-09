@@ -67,7 +67,7 @@ Trace excerpt:
 [STAGE 4 - EXECUTE] Returned 5 tuple(s)
 ```
 
-Nine catalogs across six purposes: name resolution (`pg_namespace`, `pg_class`), index discovery (`pg_index`, `pg_am`), column shape (`pg_attribute`), operator resolution (`pg_operator`, `pg_proc`, `pg_cast`), type metadata (`pg_type`), and selectivity (`pg_statistic`). Each `MISS` is a syscache miss followed by a heap read of the catalog; `HIT` is a syscache hit (no I/O).
+Ten catalogs across six purposes: name resolution (`pg_namespace`, `pg_class`), index discovery (`pg_index`, `pg_am`), column shape (`pg_attribute`), operator resolution (`pg_operator`, `pg_proc`, `pg_cast`), type metadata (`pg_type`), and selectivity (`pg_statistic`). Each `MISS` is a syscache miss followed by a heap read of the catalog; `HIT` is a syscache hit (no I/O).
 
 The cost trace explains the plan choice:
 - SeqScan = 199.00 (74 pages × `seq_page_cost` + 10000 × `cpu_tuple_cost`)

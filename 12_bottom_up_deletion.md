@@ -55,7 +55,7 @@ Simplified from `nbtree/nbtdedup.c:_bt_bottomupdel_pass`:
 
 1. Walk the leaf, group entries by leading key bytes.
 2. For each group with multiple entries, treat the group as a candidate "version-chain duplicate" set.
-3. Sort candidate TIDs by heap block, hand them to the heap callback `table_index_delete_tuples`.
+3. Sort candidate TIDs by heap block, hand them to `table_index_delete_tuples` (the table-AM wrapper in `tableam.h`), whose heap-side implementation is `heap_index_delete_tuples` (`heapam.c`).
 4. Heap inspects each TID: if the tuple is dead from every snapshot, mark it for deletion.
 5. Btree calls `_bt_delitems_delete` → emits one `XLOG_BTREE_DELETE` record per affected page.
 

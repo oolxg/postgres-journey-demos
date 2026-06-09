@@ -55,7 +55,7 @@ ORDER BY c.relname, b.relforknumber, b.relblocknumber;
 How to read this output, row by row:
 
 - The two metapage rows (`16821 blk=0`, `16823 blk=0`) are the per-index headers — `_bt_getroot` reads them once to find the root.
-- The two `16823 blk=3, blk=10` rows are the *leaves* of `person_zipcode_idx` that hold posting tuples for `'10063'`. The Bitmap Index Scan descended metapage → root → these two leaves.
+- The `16823 blk=3, blk=10` rows are the root (`blk=3`) and one leaf (`blk=10`) of `person_zipcode_idx`. The Bitmap Index Scan descended metapage → root (`blk=3`) → leaf (`blk=10`), where the posting tuples for `'10063'` live.
 - The 74 consecutive `16812 blk=0..73` rows are the entire heap. `zipcode='10063'` matches ~100 rows scattered (≈1.4 hits per page), so Bitmap Heap Scan ends up touching every page in block order. Bufferids 8248..8321 are consecutive because `evict_all` left those slots free and bufmgr handed them out in order.
 - `isdirty=f` for the whole 78 rows: read-only query, hint bits already on disk from populate-time ANALYZE (`evict_all` flushed those pages on the way out).
 - `usagecount=1` everywhere: each page pinned exactly once during this single scan.
