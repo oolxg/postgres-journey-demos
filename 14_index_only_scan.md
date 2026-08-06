@@ -1,6 +1,6 @@
 # 14. Index-Only Scan via visibility map — `Heap Fetches: 0`
 
-Thesis: §4.6.3
+Thesis: §4.3.6
 Prerequisite: [00_setup.md](00_setup.md), then run Demo 13 (or any large workload) and `VACUUM person;` so the VM marks every page all-visible.
 
 When VM bit `all_visible` is set for a heap page, an index scan can answer queries from the index alone, skipping heap fetches. EXPLAIN's `Heap Fetches:` counter increments only when the executor falls back to a heap visit (VM bit not set). After VACUUM marks every page all-visible, a covered query (output column lives in the index) returns 0 heap fetches.
@@ -40,7 +40,7 @@ SELECT zipcode FROM person WHERE zipcode = '10063';
  Execution Time: 0.249 ms
 ```
 
-The output column `zipcode` is in `person_zipcode_idx` → executor returns it from the index entry without consulting the heap. All 3 buffer hits are index pages (metapage + leaf descent) plus the VM page.
+The output column `zipcode` is in `person_zipcode_idx` → executor returns it from the index entry without consulting the heap. All 3 buffer hits are the index root, one leaf, and the VM page (the metapage is served from the planner’s `rd_amcache` copy and never re-pinned).
 
 ## Compare with uncovered column
 
@@ -65,7 +65,7 @@ During the index scan, for each TID found in the leaf, the executor checks the v
 
 Why VM check is **not** a heap fetch: VM is a separate fork (`relforknumber=2`), a tiny side-file — one VM page covers ~32k heap pages. `Heap Fetches:` counts main-fork reads only (`relforknumber=0`).
 
-## Two states of the VM
+## Two VM bits, three valid states
 
 ```sql
 -- pg_visibility shows VM and on-page bits side by side for a specific page.
@@ -83,7 +83,7 @@ Three columns:
 - `all_frozen` — VM bit; implies `all_visible` (frozen ⇒ visible). So three valid states: `(f,f)`, `(t,f)`, `(t,t)`; never `(f,t)`.
 - `pd_all_visible` — duplicate on-page flag, kept in sync with the VM bit. A mismatch indicates corruption.
 
-Any DML on the page clears both VM bits. VACUUM sets them lazily (and freezes when xmin is old enough). See thesis §4.6.1 for the bit lifecycle.
+Any DML on the page clears both VM bits. VACUUM sets them lazily (and freezes when xmin is old enough). See thesis §4.5.3 for the bit lifecycle.
 
 ## Source path
 

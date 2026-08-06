@@ -1,6 +1,6 @@
 # 11. VACUUM cycle — lazy_scan_heap → btbulkdelete → VM update
 
-Thesis: §4.4.1
+Thesis: §4.5.1
 Prerequisite: [00_setup.md](00_setup.md), then run Demos 07–09 in the same session (so the heap has dead tuples and indexes have stale entries).
 
 After UPDATEs and DELETEs, the heap and indexes carry dead/stale entries. VACUUM scans heap pages that aren't all_visible, collects dead TIDs, runs per-index `ambulkdelete` (`btbulkdelete` for btree), reclaims heap line pointers, and updates the visibility map.
@@ -72,7 +72,7 @@ From this output:
 - **`pages: 0 removed, 74 remain`** — VACUUM never shrinks the heap. PG's regular VACUUM only releases pages from the *end* of the relation (and only when fully empty); fragmented mid-relation pages are not given back. To physically shrink, run `VACUUM FULL` or `pg_repack`.
 - **`tuples: 2 removed`** — only 2 heap tuples actually freed (the dead versions from earlier UPDATEs that hadn't been pruned by HOT). The 10 DELETEd rows had already been line-pointer-pruned during a prior scan via `kill_prior_tuple` opportunism.
 - **`index scan needed: 3 pages from table had 12 dead item identifiers removed`** — twelve `LP_DEAD` line pointers across 3 heap pages triggered a single index-vacuuming pass. The per-AM callback `ambulkdelete` (here: `btbulkdelete` in `nbtree.c`) is invoked once per index, scans every leaf, and removes any entry whose TID is in the dead-TID list.
-- **`index scans: 1`** — VACUUM keeps a list of dead TIDs in memory and does **one** pass per index, regardless of how many heap pages it scanned.
+- **`index scans: 1`** — VACUUM keeps a list of dead TIDs in memory and does **one** pass per index here, because all 12 dead TIDs fit in `maintenance_work_mem`. A dead-TID list that outgrows that budget forces additional passes, which is why the counter is reported at all.
 - **`visibility map: 3 pages set all-visible, 1 pages set all-frozen`** — VM bits get updated, enabling future Index-Only Scans (Demo 14) to skip the heap.
 - **WAL usage**: 18 records, 13 FPIs, ~92 KB. VACUUM is WAL-heavy because it touches many pages.
 

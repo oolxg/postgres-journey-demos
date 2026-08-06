@@ -1,6 +1,6 @@
 # 08. non-HOT UPDATE — change an indexed column
 
-Thesis: §4.3.4
+Thesis: §4.4.4
 Prerequisite: state at the end of [07_hot_update.md](07_hot_update.md) (chain `lp=75 → lp=76` on page 73 for id=10100).
 
 `zipcode` is indexed. Updating it forces `HeapDetermineColumnsInfo` to return "indexed column changed" → HOT not viable. `heap_update` writes a new tuple version, then `ExecInsertIndexTuples` walks every index and inserts a fresh entry pointing at the new TID. The OLD entries remain in the indexes, stale.
@@ -55,10 +55,10 @@ Index state:
 - `person_zipcode_idx` originally had `'10042' → (73,75)`. Same story: HOT update did not change it. Now a new entry `'99999' → (73,77)` is added. The `'10042'` entry remains.
 
 Reader behaviour:
-- A scan on `id=10100` via pkey gets *two* matching index entries → fetches `(73,75)` and `(73,77)` → MVCC visibility resolves both to lp=77 (current version) → returned **once**.
-- A scan on `zipcode='10042'` via zipcode_idx gets the old entry → fetches `(73,75)` → follows chain → arrives at lp=77 → checks predicate (`zip='99999' ≠ '10042'`) → **discarded**. The stale entry returns no row but the executor pays for the heap fetch.
+- A scan on `id=10100` via pkey gets *two* matching index entries → fetches `(73,75)` and `(73,77)`. The `(73,75)` entry resolves to no visible tuple (the chain ends at lp=76, which is dead), only `(73,77)` yields the live version — MVCC visibility eliminates the old version and the row is returned **once**.
+- A scan on `zipcode='10042'` via zipcode_idx gets the old entry → fetches `(73,75)` → the HOT chain ends at lp=76, which is dead (`t_xmax=776`, committed) → **no visible tuple returned**. The stale entry returns no row but the executor pays for the heap fetch.
 
-This is why long-running update workloads on indexed columns inflate index size and slow down lookups: index entries accumulate but cannot be removed until VACUUM (or `kill_prior_tuple` opportunism) reaches them.
+This is why long-running update workloads on indexed columns inflate index size and slow down lookups: index entries accumulate but cannot be removed until VACUUM, `kill_prior_tuple` opportunism, or bottom-up deletion reaches them.
 
 The new tuple at `lp=77` does **not** carry `HEAP_ONLY_TUPLE` — it is a regular version that index entries point at directly.
 
@@ -68,7 +68,7 @@ The new tuple at `lp=77` does **not** carry `HEAP_ONLY_TUPLE` — it is a regula
 - `HeapDetermineColumnsInfo` finds an indexed column changed → `use_hot_update = false`
 - `heap_update` writes the new tuple, emits `XLOG_HEAP_UPDATE`
 - `src/backend/executor/execIndexing.c:ExecInsertIndexTuples` walks `ResultRelInfo->ri_IndexRelationDescs`, calls `index_insert` for each → btree emits `INSERT_LEAF`
-- Old index entries are left in place; cleanup deferred to `kill_prior_tuple` (Demo 09), `btbulkdelete` (Demo 11), or bottom-up deletion (Demo 12)
+- Old index entries are left in place; cleanup deferred to `kill_prior_tuple` ([Demo 09b](09b_kill_prior_tuple.md)), `btbulkdelete` (Demo 11), or bottom-up deletion (Demo 12)
 
 ---
 

@@ -1,6 +1,6 @@
 # 04b. Server restart — cold cache
 
-Thesis: §4.2.5
+Thesis: §4.3.5
 Prerequisite: [00_setup.md](00_setup.md). Run after Demo 04 (so the pool is warm with `person` pages) for the clearest contrast. Needs shell access to `pg_ctl` to restart the server between phases.
 
 PG keeps a shared buffer pool in memory. Restarting the server flushes this pool. The on-disk files (heap, indexes, WAL, catalogs) survive — but on the next query, every page must be re-read from disk.
@@ -20,7 +20,8 @@ ORDER BY c.relname;
 ```
         name        | buffers
 --------------------+---------
- person             |      78    -- all 74 heap pages + a few prior versions
+ person             |      78    -- 74 main-fork heap pages + FSM and VM fork pages
+                                --   (the query does not filter relforknumber)
  person_pkey        |      30    -- entire index
  person_zipcode_idx |      11    -- entire index
 ```
@@ -85,9 +86,9 @@ ORDER BY c.relname;
  person_zipcode_idx |       3 | 0,3,10        -- metapage + root (3) + one leaf (10)
 ```
 
-`person_pkey` got 1 buffer — its metapage. The query used `person_zipcode_idx`, but the planner still consulted `pg_index` for `person_pkey` to compute alternate paths; that opens the relation, which loads its metapage into the pool.
+`person_pkey` got 1 buffer — its metapage. The query used `person_zipcode_idx`, but the planner still costed the `person_pkey` path, and `_bt_getrootheight` (`nbtree/nbtpage.c:675`) reads that index's metapage once while costing. That planning-time read is what loads the metapage into the pool — opening the relation on its own reads no index pages.
 
-`person_zipcode_idx` got 3 buffers — metapage (0), root (3), and leaf for `'10063'` (10). Btree's descent path: read meta → follow `fastroot` to root page 3 → binary search → fetch leaf 10.
+`person_zipcode_idx` got 3 buffers — metapage (0), root (3), and leaf for `'10063'` (10). The metapage was likewise read at planning time by `_bt_getrootheight`, which caches its contents in `rel->rd_amcache`, so the executor's descent takes the cached path in `_bt_getroot` rather than re-reading the metapage: follow `fastroot` to root page 3 → binary search → fetch leaf 10.
 
 ## Same query again — now warm
 

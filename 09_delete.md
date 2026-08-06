@@ -1,9 +1,9 @@
 # 09. DELETE — heap-only modification, indexes untouched
 
-Thesis: §4.3.5
+Thesis: §4.4.5
 Prerequisite: [00_setup.md](00_setup.md).
 
-`heap_delete` sets `t_xmax` on the heap tuple, sets `HEAP_XMAX_EXCL_LOCK` infomask bits, emits `XLOG_HEAP_DELETE`, and stops. **No index callback is invoked.** Index entries remain in place — stale, pointing at heap tuples whose `t_xmax` is now set. Cleanup is deferred to one of three reclaim paths (Demo 11, Demo 12, or `kill_prior_tuple` opportunism during a future scan).
+`heap_delete` sets `t_xmax` on the heap tuple, sets the `HEAP_KEYS_UPDATED` bit in `t_infomask2`, emits `XLOG_HEAP_DELETE`, and stops. **No index callback is invoked.** Index entries remain in place — stale, pointing at heap tuples whose `t_xmax` is now set. Cleanup is deferred to one of three reclaim paths (Demo 11, Demo 12, or `kill_prior_tuple` opportunism during a future scan).
 
 ## Capture
 
@@ -57,7 +57,7 @@ Heap now has 10 dead tuples (`t_xmax` set, will be cleaned up by VACUUM). Index 
 
 ## How visibility works for SELECT after DELETE
 
-1. The btree search still returns the matching index entries (e.g. `'10000' → (0,99)`).
+1. The btree search still returns the matching index entries (e.g. `'10000' → (0,100)`).
 2. For each TID, the executor calls `heap_fetch` to read the heap tuple.
 3. `HeapTupleSatisfiesMVCC` sees `t_xmax` set and committed → tuple is dead from this snapshot's view → discarded.
 4. Optionally, the AM marks the index line pointer `LP_DEAD` so a future inserter can reclaim that slot without VACUUM (`kill_prior_tuple`).

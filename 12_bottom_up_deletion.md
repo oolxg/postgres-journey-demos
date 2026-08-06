@@ -1,6 +1,6 @@
 # 12. Bottom-up deletion — opportunistic cleanup at INSERT time
 
-Thesis: §4.4.2
+Thesis: §4.5.2
 Prerequisite: [00_setup.md](00_setup.md). Run on a fresh DB (no prior UPDATEs/DELETEs) for the cleanest result.
 
 Stale index entries normally wait for VACUUM (Demo 11) or for a scan to set `LP_DEAD` via `kill_prior_tuple`. PG14+ adds a third path: **bottom-up deletion**, triggered from `_bt_findinsertloc` when a leaf is full. Before splitting the leaf, btree looks at duplicate-key clusters on the leaf and asks the heap whether the corresponding tuples are still alive. Dead ones are removed in one batch; the leaf gets enough room, the split is avoided. Function: `nbtdedup.c:_bt_bottomupdel_pass`.
@@ -67,7 +67,7 @@ Simplified from `nbtree/nbtdedup.c:_bt_bottomupdel_pass`:
 - `src/backend/access/nbtree/nbtdedup.c:_bt_bottomupdel_pass` — second try, heuristic on posting/version groups
 - `src/backend/access/nbtree/nbtpage.c:_bt_delitems_delete` — actual removal + WAL emission
 
-This is the third reclaim path, complementing `kill_prior_tuple` (Demo 09) and `btbulkdelete` (Demo 11). The first two cover most workloads. Bottom-up deletion targets the specific case of UPDATE-heavy workloads where neither scans nor VACUUM run often enough to keep up.
+This is the third reclaim path, complementing `kill_prior_tuple` ([Demo 09b](09b_kill_prior_tuple.md)) and `btbulkdelete` (Demo 11). The first two cover most workloads. Bottom-up deletion targets the specific case of UPDATE-heavy workloads where neither scans nor VACUUM run often enough to keep up.
 
 ---
 

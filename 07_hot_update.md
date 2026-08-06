@@ -1,6 +1,6 @@
 # 07. HOT UPDATE — change a non-indexed column
 
-Thesis: §4.3.3
+Thesis: §4.4.3
 Prerequisite: [00_setup.md](00_setup.md), then insert the row this demo updates: `INSERT INTO person VALUES (10100, 'Bef', '10042', 30);` (puts the row on page 73 with spare space).
 
 `name` is not indexed; `id` and `zipcode` are. Updating only `name` keeps every indexed column unchanged → HOT-eligible. `heap_update` writes the new tuple on the **same page** and sets a forward link from the old tuple to the new one via `t_ctid`. Both indexes are skipped entirely: zero Btree WAL records.

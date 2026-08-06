@@ -1,6 +1,6 @@
 # 10. Dirty-page signatures — HOT vs non-HOT vs DELETE
 
-Thesis: §4.3.6
+Thesis: §4.4.6
 Prerequisite: [00_setup.md](00_setup.md), then `INSERT INTO person VALUES (10100, 'Bef', '10042', 30);` to set up the row we'll UPDATE.
 
 The WAL trail in Demos 07–09 already shows which records each DML emits. A second angle on the same story: which buffer-pool pages each DML *dirties*. `CHECKPOINT` flushes all dirty pages to disk before each demo, so the dirty bits seen afterwards come exclusively from the operation that follows.
@@ -39,7 +39,7 @@ ORDER BY c.relname, b.relforknumber, b.relblocknumber;
  person  |    0 |  73 |  5     -- heap page holding the row
 ```
 
-HOT update dirties only the heap. Both indexes stay clean — `update_indexes=false` in `heap_update`'s return path skips `ExecInsertIndexTuples` entirely.
+HOT update dirties only the heap. Both indexes stay clean — `heap_update` sets `use_hot_update`, returning `*update_indexes = TU_None`, so `ExecUpdate`'s `updateIndexes != TU_None` guard skips `ExecInsertIndexTuples` entirely.
 
 ## B) non-HOT UPDATE: heap + one leaf per index
 

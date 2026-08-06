@@ -1,6 +1,6 @@
 # 03. Seq Scan baseline — no index on `age`
 
-Thesis: §4.2.3
+Thesis: §4.3.2, §4.3.3
 Prerequisite: [00_setup.md](00_setup.md). Run after Demos 01 and 02 in the same session to see the cold→warm catcache transition.
 
 `age` is not indexed. The planner has only one path: full **Seq Scan** over all 74 heap pages. This is the cost baseline against which the index-based plans in Demos 01 and 02 are measured.
@@ -25,7 +25,7 @@ SELECT count(*) FROM person WHERE age > 75;
 ```
 
 - **Heap buffers** `hit=74` — every heap page visited (no index → no skip).
-- **Planning buffers** `hit=12` — much smaller than the 96 hits Demo 01 paid because the catcache is now warm: `pg_class`, `pg_attribute`, etc. were loaded by the earlier queries. The remaining 12 reads are for catalogs specific to this query (smallint operator/proc, `age` column's `pg_statistic` entry).
+- **Planning buffers** `hit=12` — much smaller than the 96 hits Demo 01 paid because the catcache is now warm: `pg_class`, `pg_attribute`, etc. were loaded by the earlier queries. Most lookups are now served from `rel->rd_amcache` or `SysCache` without touching the buffer pool. The only catalog still re-read is `pg_statistic`, whose stats entries can be evicted by autovacuum and refreshed on next use.
 
 664 rows match: `age = 20 + g % 60` gives ages in 20..79, so `age > 75` keeps ages 76, 77, 78, 79 — 4 buckets out of 60 ≈ 6.67% of 10000 ≈ 667.
 

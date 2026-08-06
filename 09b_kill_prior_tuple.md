@@ -1,6 +1,6 @@
 # 09b. kill_prior_tuple — opportunistic LP_DEAD set by a reader
 
-Thesis: §4.3.5
+Thesis: §4.4.5
 Prerequisite: [00_setup.md](00_setup.md). Run on a fresh DB before any other DELETE/UPDATE demos so dead-row bookkeeping is unambiguous.
 
 DELETE (Demo 09) leaves index entries pointing at heap tuples whose `t_xmax` is now committed. The next scan that walks those entries does the rest of the work:
@@ -12,7 +12,7 @@ DELETE (Demo 09) leaves index entries pointing at heap tuples whose `t_xmax` is 
 5. Right before the scan moves off this leaf, `_bt_killitems` (`nbtutils.c:3265`) re-locks the buffer, walks `killedItems[]`, and sets the `LP_DEAD` bit on each matching item identifier.
 6. The next inserter into this leaf finds the `LP_DEAD` bits during `_bt_simpledel_pass` and reclaims those slots without waiting for VACUUM.
 
-The bit is a hint, not a commitment: it can be lost without harm (e.g. if the page LSN changed between scan and kill, `_bt_killitems` gives up entirely; see `nbtutils.c:3286`). What it cannot do is point at a live tuple — the visibility check that gates it is conservative.
+The bit is a hint, not a commitment: it can be lost without harm (e.g. for scans that drop the buffer pin eagerly, `so->dropPin`, a changed page LSN between scan and kill makes `_bt_killitems` give up entirely — see `nbtutils.c:3286`). What it cannot do is point at a live tuple — the visibility check that gates it is conservative.
 
 ## Capture
 
@@ -129,7 +129,7 @@ DROP TABLE leaf_snap;
         110 |  t   | (0,109)
 ```
 
-The `htid` column is the heap TID each index entry points at — exactly the ten rows just deleted by `id BETWEEN 100 AND 109`. The btree `itemoffset` numbering starts at 1, so id=100 sits at offset 101 (offset 1 is reserved for the leaf's `high_key` when one exists; on the leftmost leaf with no left sibling, the first data offset is 2 — see `nbtree.h:P_FIRSTDATAKEY` and the layout described in Demo 00).
+The `htid` column is the heap TID each index entry points at — exactly the ten rows just deleted by `id BETWEEN 100 AND 109`. The btree `itemoffset` numbering starts at 1, and offset 1 holds the leaf's `high_key` on any non-rightmost page, so the first data entry is at offset 2 and id=100 lands at offset 101 (`nbtree.h:P_FIRSTDATAKEY` keys this on `P_RIGHTMOST`, not on having a left sibling — see also the layout described in Demo 00).
 
 ## Why this is opportunistic, not eager
 

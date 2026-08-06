@@ -1,6 +1,6 @@
 # 00. Setup and Populate
 
-Thesis: §4.1
+Thesis: §4.2.1
 
 Schema is two-index, mixed-cardinality. `id` is monotonically ascending (pkey, no duplicates). `zipcode` is non-unique with ~100 distinct values, each repeating ~100 times — heavy duplication, on purpose, to exercise btree deduplication later.
 
@@ -140,7 +140,7 @@ LIMIT 5;
 - `LP_UNUSED` — slot unused, free to allocate
 - `LP_NORMAL` — points at a live tuple
 - `LP_REDIRECT` — HOT-prune redirect, points at the next live tuple in the chain
-- `LP_DEAD` — the tuple is known dead (set by `kill_prior_tuple` or by VACUUM); the slot is reclaimable but the data is still around
+- `LP_DEAD` — the tuple is known dead (set by HOT pruning or by VACUUM — `kill_prior_tuple` sets LP_DEAD on *index* items, not on heap line pointers); the slot is reclaimable but the data is still around
 
 `t_xmin = 769` — the xid that inserted the row. `t_xmax = 0` — not deleted. `t_ctid = (0,1)` — self pointer; this *is* the current version.
 

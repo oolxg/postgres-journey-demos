@@ -1,6 +1,6 @@
 # 01. SELECT by zipcode — parser → planner → BitmapHeapScan
 
-Thesis: §4.2.1, §4.2.2, §4.2.3
+Thesis: §4.3.1, §4.3.2, §4.3.3
 Prerequisite: [00_setup.md](00_setup.md) (74 heap pages, 10000 rows).
 
 `zipcode = '10063'` matches 100 rows scattered across all 74 heap pages (`zipcode = 10000 + g % 100` → every 100th row shares a zipcode → uniform spread). The planner picks **Bitmap Heap Scan**: collect TIDs into a bitmap via the index, sort by heap block, then fetch heap pages in order — random I/O turned sequential.
@@ -30,12 +30,12 @@ SELECT name FROM person WHERE zipcode = '10063';
 
 Three buffer counts:
 - **Index buffers** `hit=2` — root (page 3) + 1 leaf.
-- **Heap buffers** `hit=76` — bitmap heap scan touched 74 heap pages + 2 metadata pages. Every heap page had at least one matching row.
+- **Heap buffers** `hit=76` — 74 heap pages plus the child Bitmap Index Scan's 2 index buffers (EXPLAIN buffer counts are cumulative over child nodes). Every heap page had at least one matching row.
 - **Planning buffers** `hit=96 dirtied=3` — first query of the session pays the catcache warm-up cost. Subsequent queries amortise (Demo 03 will show planning down to ~12).
 
 ## Catalog access pattern
 
-With the diploma-instrumentation build (`NOTICE` `elog` in `catcache.c` / `tcop/postgres.c`), the same query traces every catalog hit/miss:
+With the diploma-instrumentation build (`NOTICE` `elog` lines across seven files — see [Notes on the build](README.md#notes-on-the-build)), the same query traces every catalog hit/miss:
 
 ```sql
 SET client_min_messages = 'NOTICE';

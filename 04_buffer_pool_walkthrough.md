@@ -1,6 +1,6 @@
 # 04. Buffer pool contents via pg_buffercache
 
-Thesis: §4.2.4
+Thesis: §4.3.4
 Prerequisite: [00_setup.md](00_setup.md).
 
 `EXPLAIN BUFFERS` counts I/O against the executor; it does not show *what is resident* in the shared pool right now. `pg_buffercache` exposes the pool slot by slot. Each row is one shared-buffer slot with these fields of interest:
@@ -41,7 +41,7 @@ ORDER BY c.relname, b.relforknumber, b.relblocknumber;
 ----------+-------------+------+-----+-------+----+-----
      8223 |       16821 |    0 |   0 |   f   |  1 |   0    -- pkey metapage
      8224 |       16823 |    0 |   0 |   f   |  1 |   0    -- zipcode_idx metapage
-     8246 |       16823 |    0 |   3 |   f   |  1 |   0    -- zipcode_idx leaf
+     8246 |       16823 |    0 |   3 |   f   |  1 |   0    -- zipcode_idx root
      8247 |       16823 |    0 |  10 |   f   |  1 |   0    -- zipcode_idx leaf
      8248 |       16812 |    0 |   0 |   f   |  1 |   0    -- person heap blk 0
      8249 |       16812 |    0 |   1 |   f   |  1 |   0
@@ -54,14 +54,14 @@ ORDER BY c.relname, b.relforknumber, b.relblocknumber;
 
 How to read this output, row by row:
 
-- The two metapage rows (`16821 blk=0`, `16823 blk=0`) are the per-index headers — `_bt_getroot` reads them once to find the root.
+- The two metapage rows (`16821 blk=0`, `16823 blk=0`) are the per-index headers. The planner's `_bt_getrootheight` (`nbtree/nbtpage.c:675`) reads each one once while costing the query, which is why the `person_pkey` metapage is resident even though this query never descends that index. `_bt_getroot` only consumes the copy already cached in `rel->rd_amcache`.
 - The `16823 blk=3, blk=10` rows are the root (`blk=3`) and one leaf (`blk=10`) of `person_zipcode_idx`. The Bitmap Index Scan descended metapage → root (`blk=3`) → leaf (`blk=10`), where the posting tuples for `'10063'` live.
 - The 74 consecutive `16812 blk=0..73` rows are the entire heap. `zipcode='10063'` matches ~100 rows scattered (≈1.4 hits per page), so Bitmap Heap Scan ends up touching every page in block order. Bufferids 8248..8321 are consecutive because `evict_all` left those slots free and bufmgr handed them out in order.
 - `isdirty=f` for the whole 78 rows: read-only query, hint bits already on disk from populate-time ANALYZE (`evict_all` flushed those pages on the way out).
 - `usagecount=1` everywhere: each page pinned exactly once during this single scan.
 - `pinning_backends=0` everywhere: no concurrent backend holds these pages, and our own session has finished pinning by the time `pg_buffercache` runs.
 
-The same 78 pages show up in `EXPLAIN BUFFERS` for this query as `shared hit=76` (Bitmap Heap Scan, re-pin double-counting on the heap side) plus `shared hit=2` (Bitmap Index Scan). EXPLAIN gives executor counters; `pg_buffercache` shows the exact pages those counters represent.
+`EXPLAIN BUFFERS` for this query reports `shared hit=76` on the Bitmap Heap Scan, which is cumulative over the subtree: 74 heap pages plus the 2 index buffers already shown on the child Bitmap Index Scan. The pool holds 78 pages rather than 76 because the two metapages were loaded during planning, not by the executor. EXPLAIN gives executor counters; `pg_buffercache` shows the exact pages those counters represent.
 
 ## Warm inspection — repeat five more times
 
@@ -91,11 +91,11 @@ ORDER BY c.relname, b.relblocknumber;
  person             | 73  |   f   |  5
  person_pkey        | 0   |   f   |  1    <-- metapage stays at uc=1
  person_zipcode_idx | 0   |   f   |  1    <-- metapage stays at uc=1
- person_zipcode_idx | 3   |   f   |  5    <-- leaf climbed to uc=5
+ person_zipcode_idx | 3   |   f   |  5    <-- root climbed to uc=5
  person_zipcode_idx | 10  |   f   |  5    <-- leaf climbed to uc=5
 ```
 
-The clock-sweep counter saturates at 5 for buffers touched on every scan. Metapages stay at 1 because `_bt_getroot` (`nbtree/nbtpage.c:344`) caches `BTMetaPageData` in `rel->rd_amcache` after the first descent — subsequent scans skip the metapage entirely and jump straight to the cached `fastroot`, so the metapage buffer is never re-pinned. The leaves we use on every scan climb to the maximum.
+The clock-sweep counter saturates at 5 for buffers touched on every scan. Metapages stay at 1 because the planner's `_bt_getrootheight` (`nbtree/nbtpage.c:675`) reads each metapage once while costing the first query and caches its contents in `rel->rd_amcache`. `_bt_getroot` (`nbtree/nbtpage.c:344`) then takes the cached path on every descent, jumping straight to the cached `fastroot`, so the metapage buffer is never re-pinned. The leaves we use on every scan climb to the maximum.
 
 ## Aggregate views
 

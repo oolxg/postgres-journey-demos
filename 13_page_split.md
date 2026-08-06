@@ -1,6 +1,6 @@
 # 13. Page split — tree height grows + Lehman-Yao right-links
 
-Thesis: §4.5.1, §4.5.2
+Thesis: §4.3.7, §4.4.7
 Prerequisite: [00_setup.md](00_setup.md). Run on a fresh DB.
 
 Both indexes start at level 1 (root + leaves). Inserting ~200k more rows on monotonically increasing `id` forces leaf splits in `person_pkey`. When the root's separator slots overflow, a new root page is allocated above and the tree gains a level. Internal pages also have `btpo_next` right-links so a concurrent reader pinned on an OLD page can still find its way (Lehman-Yao).
@@ -125,7 +125,7 @@ Internal-page items map: `(3,0)` — leftmost, no key (everything below the firs
         ...leaves...                          ...leaves...                          ...leaves...
 ```
 
-- The root **moved** to a new page (412). The old root (page 3) was demoted in place — its contents stayed; what changed is the metapage now points at 412 and page 3 has `btpo_level = 1` (internal, not root).
+- The root **moved** to a new page (412). When the old root filled its separator slots, `_bt_split` divided its entries between page 3 and a newly allocated right sibling (page 411), both now at level 1, and only then did `_bt_newlevel` allocate page 412 above the two as the new root. The metapage now points at 412 and page 3 has `btpo_level = 1` (internal, not root).
 - Right-links exist at every level. Internal pages 3, 411, 698 are linked left-to-right via `btpo_next`. Leaves under each have their own right-link chain.
 - Reading `bt_metap('person_pkey')` returns the **current** root pointer (412). The metapage's `fastroot` field can shortcut to a deeper level if there are no useful upper levels (see Demo 00); for a freshly split 2-level tree fastroot equals root.
 
@@ -151,7 +151,7 @@ Reader R is still pinned on L. It checks: target key 175000 vs L's high_key (now
 - `src/backend/access/nbtree/nbtinsert.c:_bt_doinsert` — top of the insert call chain
 - `src/backend/access/nbtree/nbtinsert.c:_bt_findinsertloc` — leaf-full check
 - `src/backend/access/nbtree/nbtinsert.c:_bt_split` — divides entries across two leaves; sets `btpo_next` on the old leaf BEFORE releasing the write lock (Lehman-Yao invariant)
-- `_bt_insert_parent` recurses upward; at the root, `_bt_newlevel` (`nbtinsert.c:2426`) allocates a brand-new root page and leaves the old root in place
+- `_bt_insert_parent` recurses upward; at the top, `_bt_split` has already produced two sibling pages at the old root's level, and `_bt_newlevel` (`nbtinsert.c:2444`) allocates a fresh page above them as the new root
 - Right-link traversal during concurrent reads: `src/backend/access/nbtree/nbtsearch.c:_bt_moveright`
 
 (Block numbers above are deterministic for the 200k INSERT workload on a freshly-populated 10k-row table; adjust expectations if you run a different load.)

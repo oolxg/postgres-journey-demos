@@ -1,9 +1,9 @@
-# 05. INSERT WAL trail — six records per one-row INSERT
+# 05. INSERT WAL trail — six records in the LSN window, five from the INSERT
 
-Thesis: §4.3.1
+Thesis: §4.4.1
 Prerequisite: [00_setup.md](00_setup.md) (74 heap pages, 10000 rows).
 
-A single-row INSERT produces six WAL records. Captured by `pg_walinspect` between two LSNs.
+An LSN window bracketing a single-row INSERT captures six WAL records, five of them produced by the INSERT path itself. Captured by `pg_walinspect` between two LSNs.
 
 ## Capture
 
@@ -36,10 +36,10 @@ ORDER BY start_lsn;
  0/1FBC280 | Transaction      | COMMIT          |            34
 ```
 
-One row, six WAL records:
+One row, six records in the window:
 
 1. **`XLOG / FPI_FOR_HINT`** (8005 bytes). When the INSERT opened heap page 73, visibility checks on the existing tuples set `HEAP_XMIN_COMMITTED` hint bits, dirtying the page. Hint-bit changes are normally not logged — they're a re-derivable optimisation — but with `data_checksums` (or `wal_log_hints`) enabled, a torn write of a partially-flushed page would leave a checksum mismatch on disk that recovery cannot fix without the original content. So the first time a page is dirtied in a checkpoint cycle for hint bits only, Postgres emits a stand-alone full page image. Source: `bufmgr.c:MarkBufferDirtyHint`.
-2. **`Heap2 / PRUNE_ON_ACCESS`** (52 bytes). Opportunistic page prune triggered during the buffer pin — small dead-tuple cleanup riding along.
+2. **`Heap2 / PRUNE_ON_ACCESS`** (52 bytes). Not emitted by the INSERT path. The prune emit site in `pruneheap.c` is reached only via `heap_page_prune_opt`, which is called from the heap-scan paths in `heapam.c` and `heapam_handler.c`, never from INSERT. `pg_walinspect` returns every record in the LSN window, and this one comes from a heap scan that touched the same page between the two LSN reads.
 3. **`Heap / INSERT`** (4458 bytes). The actual heap tuple. Includes a full page image (post-prune state).
 4. **`Btree / INSERT_LEAF`** (2473 bytes). Insert into `person_pkey`. Just the new index tuple — no FPI needed, the leaf page had already been imaged in this checkpoint cycle.
 5. **`Btree / INSERT_LEAF`** (7293 bytes). Insert into `person_zipcode_idx`. Includes a full page image of the leaf — first time this leaf is written in this checkpoint cycle.

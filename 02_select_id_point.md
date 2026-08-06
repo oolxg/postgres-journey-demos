@@ -1,6 +1,6 @@
 # 02. SELECT by id — plain Index Scan
 
-Thesis: §4.2.3
+Thesis: §4.3.3
 Prerequisite: [00_setup.md](00_setup.md).
 
 `id` is the pkey, unique. A point lookup hits exactly one TID — no bitmap reorder needed. Planner picks **Index Scan**: descend the btree, fetch the one matching heap tuple, return.
@@ -48,7 +48,9 @@ SELECT name FROM person WHERE id BETWEEN 5000 AND 5010;
 - Planner: `src/backend/optimizer/path/indxpath.c` builds an IndexPath, planner picks IndexScan when the predicate is highly selective (estimated 1 row)
 - Executor: `src/backend/executor/nodeIndexscan.c:ExecIndexScan`
   → `src/backend/access/index/indexam.c:index_getnext_tid` (calls `amgettuple` → `btgettuple`)
-  → `src/backend/access/heap/heapam.c:heap_fetch` (per-TID heap visit)
+  → `src/backend/access/index/indexam.c:index_fetch_heap`
+  → `src/backend/access/heap/heapam_handler.c:heapam_index_fetch_tuple`
+  → `src/backend/access/heap/heapam.c:heap_hot_search_buffer` (per-TID heap visit, walks the HOT chain)
 
 ---
 
