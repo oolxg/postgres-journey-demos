@@ -81,7 +81,31 @@ The thesis's claims are about mechanism and category, not about specific OIDs. W
 
 ## Notes on the build
 
-The thesis uses a PG 18.1 build with a small instrumentation patch on `catcache.c`, `tcop/postgres.c`, `parser/parse_relation.c`, `optimizer/util/plancat.c`, `optimizer/path/costsize.c`, `utils/adt/selfuncs.c`, and `executor/execMain.c` — a single commit adding `elog(NOTICE, ...)` lines to trace catalog access, planning, and execution. The patch is not required for the demos; on stock PG 18.1 the same queries produce the same outputs minus the `[CATCACHE …]`, `[STAGE …]`, `[PLANCAT …]`, `[COST …]`, and `[SELFUNCS …]` lines.
+The thesis uses a PG 18.1 build with a small instrumentation patch on `catcache.c`, `tcop/postgres.c`, `parser/parse_relation.c`, `optimizer/util/plancat.c`, `optimizer/path/costsize.c`, `utils/adt/selfuncs.c`, and `executor/execMain.c` — a small diff adding `elog(NOTICE, ...)` lines to trace catalog access, planning, and execution. The patch is not required for the demos; on stock PG 18.1 the same queries produce the same outputs minus the `[CATCACHE …]`, `[STAGE …]`, `[PLANCAT …]`, `[COST …]`, and `[SELFUNCS …]` lines.
+
+The full diff ships in this repository as [`elog_trace.patch`](elog_trace.patch), generated against the [`REL_18_1`](https://github.com/postgres/postgres/tree/REL_18_1) tag. What each touched file contributes:
+
+| File (under `src/backend/` in the PostgreSQL tree) | Added trace |
+|----------------------------------------------------|-------------|
+| `tcop/postgres.c` | `[STAGE 1–3]` — parse, analyze+rewrite, plan, per statement in `exec_simple_query` |
+| `executor/execMain.c` | `[STAGE 4 - EXECUTE]` — tuple count returned by `standard_ExecutorRun` |
+| `parser/parse_relation.c` | `[parserOpenTable]` — table-name resolution |
+| `utils/cache/catcache.c` | `[CATCACHE HIT/MISS/NEG-HIT]` — per-lookup outcome in `SearchCatCacheInternal` |
+| `optimizer/util/plancat.c` | `[PLANCAT]` — pages/tuples/indexes read by `get_relation_info` |
+| `utils/adt/selfuncs.c` | `[SELFUNCS]` — `pg_statistic` lookups in `examine_simple_variable` |
+| `optimizer/path/costsize.c` | `[COST]` — cost arithmetic of `cost_seqscan` and `cost_index`, incl. selectivity and correlation |
+
+The patch also adds `DIPLOMA`-prefixed explanatory comments at each stage; they change no behaviour. To reproduce the instrumented build:
+
+```bash
+git clone --branch REL_18_1 --depth 1 https://github.com/postgres/postgres.git
+cd postgres
+git apply /path/to/elog_trace.patch
+./configure --prefix=$HOME/pg18-instrumented   # plus your usual options
+make -j && make install
+```
+
+Only the instrumented-trace blocks in Demo 01 require this build.
 
 The instrumented `selfuncs.c` path perturbs the planner's handling of `WHERE` clauses on function-scan RTE columns. Filters directly on `pg_buffercache_pages()` columns raise `bogus varno` on this build. The demos work around it by joining the `pg_buffercache` view against `pg_class` for filter conditions.
 

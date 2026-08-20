@@ -1,0 +1,281 @@
+diff --git a/src/backend/executor/execMain.c b/src/backend/executor/execMain.c
+index 27c9eec697b..2d88f4601ec 100644
+--- a/src/backend/executor/execMain.c
++++ b/src/backend/executor/execMain.c
+@@ -370,6 +370,11 @@ standard_ExecutorRun(QueryDesc *queryDesc,
+ 					direction,
+ 					dest);
+ 
++	/* DEBUG DIPLOMA: executor done */
++	if (operation == CMD_SELECT)
++		elog(NOTICE, "[STAGE 4 - EXECUTE] Returned " UINT64_FORMAT " tuple(s)",
++			 estate->es_processed);
++
+ 	/*
+ 	 * Update es_total_processed to keep track of the number of tuples
+ 	 * processed across multiple ExecutorRun() calls.
+diff --git a/src/backend/optimizer/path/costsize.c b/src/backend/optimizer/path/costsize.c
+index a290a3e66b6..d08469ae933 100644
+--- a/src/backend/optimizer/path/costsize.c
++++ b/src/backend/optimizer/path/costsize.c
+@@ -357,6 +357,11 @@ cost_seqscan(Path *path, PlannerInfo *root,
+ 	path->disabled_nodes = enable_seqscan ? 0 : 1;
+ 	path->startup_cost = startup_cost;
+ 	path->total_cost = startup_cost + cpu_run_cost + disk_run_cost;
++
++	/* DEBUG DIPLOMA: cost_seqscan */
++	elog(NOTICE, "[COST] SeqScan: rel=%d pages=%u tuples=%.0f | startup=%.2f total=%.2f (disk=%.2f cpu=%.2f)",
++		 baserel->relid, baserel->pages, baserel->tuples,
++		 path->startup_cost, path->total_cost, disk_run_cost, cpu_run_cost);
+ }
+ 
+ /*
+@@ -828,6 +833,12 @@ cost_index(IndexPath *path, PlannerInfo *root, double loop_count,
+ 
+ 	path->path.startup_cost = startup_cost;
+ 	path->path.total_cost = startup_cost + run_cost;
++
++	/* DEBUG DIPLOMA: cost_index */
++	elog(NOTICE, "[COST] IndexScan: rel=%d idx_pages=%.0f tbl_pages=%.0f tuples=%.0f | selectivity=%.6f corr=%.4f fetched=%.0f | startup=%.2f total=%.2f",
++		 baserel->relid, (double)index->pages, (double)baserel->pages, baserel->tuples,
++		 indexSelectivity, indexCorrelation, tuples_fetched,
++		 path->path.startup_cost, path->path.total_cost);
+ }
+ 
+ /*
+diff --git a/src/backend/optimizer/util/plancat.c b/src/backend/optimizer/util/plancat.c
+index 1d9aaf9146f..7ea708e706b 100644
+--- a/src/backend/optimizer/util/plancat.c
++++ b/src/backend/optimizer/util/plancat.c
+@@ -564,6 +564,11 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
+ 	if (inhparent && relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+ 		set_relation_partition_info(root, rel, relation);
+ 
++	/* DEBUG DIPLOMA: planner got relation info */
++	elog(NOTICE, "[PLANCAT] get_relation_info: %s (oid=%u) pages=%u tuples=%.0f indexes=%d",
++		 RelationGetRelationName(relation), relationObjectId,
++		 rel->pages, rel->tuples, list_length(indexinfos));
++
+ 	table_close(relation, NoLock);
+ 
+ 	/*
+diff --git a/src/backend/parser/parse_relation.c b/src/backend/parser/parse_relation.c
+index 04ecf64b1fc..093203d09d9 100644
+--- a/src/backend/parser/parse_relation.c
++++ b/src/backend/parser/parse_relation.c
+@@ -1437,6 +1437,8 @@ parserOpenTable(ParseState *pstate, const RangeVar *relation, int lockmode)
+ 	Relation	rel;
+ 	ParseCallbackState pcbstate;
+ 
++	elog(NOTICE, "[parserOpenTable] relName: %s", relation->relname);
++
+ 	setup_parser_errposition_callback(&pcbstate, pstate, relation->location);
+ 	rel = table_openrv_extended(relation, lockmode, true);
+ 	if (rel == NULL)
+diff --git a/src/backend/tcop/postgres.c b/src/backend/tcop/postgres.c
+index 2f8c3d5f918..92034069e50 100644
+--- a/src/backend/tcop/postgres.c
++++ b/src/backend/tcop/postgres.c
+@@ -1041,6 +1041,9 @@ exec_simple_query(const char *query_string)
+ 	 * BEGIN/COMMIT/ABORT statement; we have to force a new xact command after
+ 	 * one of those, else bad things will happen in xact.c. (Note that this
+ 	 * will normally change current memory context.)
++	 *
++	 * DIPLOMA: Every SQL statement runs inside a transaction, even without
++	 * explicit BEGIN/COMMIT. This opens an implicit transaction.
+ 	 */
+ 	start_xact_command();
+ 
+@@ -1058,11 +1061,21 @@ exec_simple_query(const char *query_string)
+ 	oldcontext = MemoryContextSwitchTo(MessageContext);
+ 
+ 	/*
+-	 * Do basic parsing of the query or queries (this should be safe even if
+-	 * we are in aborted transaction state!)
++	 * DIPLOMA STAGE 1 — PARSER
++	 *
++	 * pg_parse_query() invokes the Bison/Flex grammar (gram.y + scan.l) to
++	 * transform the raw SQL text into a list of parse trees (RawStmt nodes).
++	 * For "SELECT name FROM t WHERE id > 995" this produces a SelectStmt.
++	 *
++	 * No system catalog access happens here — this is pure syntax analysis.
++	 * The parser does not know whether table "t" exists or what type "id" is.
+ 	 */
+ 	parsetree_list = pg_parse_query(query_string);
+ 
++	/* DIPLOMA: log how many raw statements the parser produced */
++	elog(NOTICE, "[STAGE 1 - PARSE] Query: \"%s\" -> parsed into %d raw statement(s)",
++		 query_string, list_length(parsetree_list));
++
+ 	/* Log immediately if dictated by log_statement */
+ 	if (check_log_statement(parsetree_list))
+ 	{
+@@ -1156,6 +1169,10 @@ exec_simple_query(const char *query_string)
+ 
+ 		/*
+ 		 * Set up a snapshot if parse analysis/planning will need one.
++		 *
++		 * DIPLOMA: A snapshot provides a consistent view of the database for
++		 * catalog lookups during analysis and planning. Without it, the
++		 * analyzer could see partially-committed catalog changes.
+ 		 */
+ 		if (analyze_requires_snapshot(parsetree))
+ 		{
+@@ -1186,12 +1203,65 @@ exec_simple_query(const char *query_string)
+ 		else
+ 			oldcontext = MemoryContextSwitchTo(MessageContext);
+ 
++		/*
++		 * DIPLOMA STAGE 2 — ANALYZER + REWRITER
++		 *
++		 * pg_analyze_and_rewrite_fixedparams() does two things:
++		 *
++		 * 1) Semantic analysis (parse_analyze_fixedparams):
++		 *    - Resolves table names to OIDs via pg_class ("t" -> OID 16391)
++		 *    - Resolves column names via pg_attribute ("name" -> attnum=2)
++		 *    - Resolves operators via pg_operator (">" for int4 -> int4gt)
++		 *    - Resolves types via pg_type (int4: typlen=4, typbyval=true)
++		 *    All catalog lookups go through CatCache (see catcache.c).
++		 *    Result: a Query tree with OIDs instead of names.
++		 *
++		 * 2) Query rewrite (QueryRewrite):
++		 *    - Applies rewrite rules from pg_rewrite (e.g. view expansion).
++		 *    - For simple queries on base tables, this is a pass-through.
++		 */
+ 		querytree_list = pg_analyze_and_rewrite_fixedparams(parsetree, query_string,
+ 															NULL, 0, NULL);
+ 
++		/* DIPLOMA: log how many query trees the analyzer + rewriter produced */
++		elog(NOTICE, "[STAGE 2 - ANALYZE+REWRITE] Produced %d query tree(s)",
++			 list_length(querytree_list));
++
++		/*
++		 * DIPLOMA STAGE 3 — PLANNER
++		 *
++		 * pg_plan_queries() calls the planner for each Query tree.
++		 * The planner:
++		 *   1) Collects table statistics from pg_class (pages, tuples)
++		 *      and index info from pg_index — see get_relation_info().
++		 *   2) Reads per-column statistics from pg_statistic
++		 *      (histogram, MCV, correlation) — see examine_simple_variable().
++		 *   3) Estimates selectivity (e.g. scalarineqsel() -> 0.005 for id>995).
++		 *   4) Computes cost for each access path:
++		 *      - cost_seqscan(): total = seq_page_cost*pages + cpu costs
++		 *      - cost_index():   uses selectivity + correlation for I/O estimate
++		 *   5) Picks the cheapest path and builds a PlannedStmt.
++		 *
++		 * For "SELECT name FROM t WHERE id > 995":
++		 *   SeqScan cost = 18.50, IndexScan cost = 8.36 -> IndexScan wins.
++		 */
+ 		plantree_list = pg_plan_queries(querytree_list, query_string,
+ 										CURSOR_OPT_PARALLEL_OK, NULL);
+ 
++		/* DIPLOMA: log the chosen plan node type, estimated rows, and total cost */
++		{
++			ListCell *lc;
++			foreach(lc, plantree_list)
++			{
++				PlannedStmt *pstmt = lfirst_node(PlannedStmt, lc);
++				if (pstmt->commandType == CMD_SELECT)
++					elog(NOTICE, "[STAGE 3 - PLAN] Plan node tag: %d, est. rows: %.0f, total cost: %.2f",
++						 (int) nodeTag(pstmt->planTree),
++						 pstmt->planTree->plan_rows,
++						 pstmt->planTree->total_cost);
++			}
++		}
++
+ 		/*
+ 		 * Done with the snapshot used for parsing/planning.
+ 		 *
+@@ -1211,6 +1281,10 @@ exec_simple_query(const char *query_string)
+ 		/*
+ 		 * Create unnamed portal to run the query or queries in. If there
+ 		 * already is one, silently drop it.
++		 *
++		 * DIPLOMA: A Portal is PostgreSQL's abstraction for query execution.
++		 * Even a simple SELECT goes through a portal. The portal holds the
++		 * plan, manages executor state, and streams result tuples to the client.
+ 		 */
+ 		portal = CreatePortal("", true, true);
+ 		/* Don't display the portal in pg_cursors */
+@@ -1229,7 +1303,9 @@ exec_simple_query(const char *query_string)
+ 						  NULL);
+ 
+ 		/*
+-		 * Start the portal.  No parameters here.
++		 * DIPLOMA: PortalStart() initializes the executor state.
++		 * For an IndexScan plan, this calls ExecInitIndexScan() which
++		 * opens the index and table relations, sets up scan keys, etc.
+ 		 */
+ 		PortalStart(portal, NULL, 0, InvalidSnapshot);
+ 
+@@ -1268,7 +1344,18 @@ exec_simple_query(const char *query_string)
+ 		MemoryContextSwitchTo(oldcontext);
+ 
+ 		/*
+-		 * Run the portal to completion, and then drop it (and the receiver).
++		 * DIPLOMA STAGE 4 — EXECUTOR
++		 *
++		 * PortalRun() drives the executor to completion:
++		 *   - ExecutorRun() repeatedly calls ExecProcNode() on the plan tree
++		 *   - For IndexScan: descends the B-tree, fetches matching TIDs,
++		 *     then does heap lookups to retrieve the actual tuples
++		 *   - Each result tuple is sent to the client via the DestReceiver
++		 *   - ExecutorEnd() cleans up (closes relations, frees memory)
++		 *
++		 * No catalog lookups happen here — everything was resolved in
++		 * stages 2 and 3. The executor only touches data pages and index pages
++		 * through the shared buffer cache.
+ 		 */
+ 		(void) PortalRun(portal,
+ 						 FETCH_ALL,
+diff --git a/src/backend/utils/adt/selfuncs.c b/src/backend/utils/adt/selfuncs.c
+index c82bacd7c15..bbd96a9fc0f 100644
+--- a/src/backend/utils/adt/selfuncs.c
++++ b/src/backend/utils/adt/selfuncs.c
+@@ -5642,6 +5642,11 @@ examine_simple_variable(PlannerInfo *root, Var *var,
+ 											  BoolGetDatum(rte->inh));
+ 		vardata->freefunc = ReleaseSysCache;
+ 
++		/* DEBUG DIPLOMA: pg_statistic lookup */
++		elog(NOTICE, "[SELFUNCS] examine_simple_variable: looked up pg_statistic for rel=%u att=%d -> %s",
++			 rte->relid, var->varattno,
++			 HeapTupleIsValid(vardata->statsTuple) ? "FOUND" : "NOT FOUND");
++
+ 		if (HeapTupleIsValid(vardata->statsTuple))
+ 		{
+ 			/*
+diff --git a/src/backend/utils/cache/catcache.c b/src/backend/utils/cache/catcache.c
+index 657648996c2..6d23296c308 100644
+--- a/src/backend/utils/cache/catcache.c
++++ b/src/backend/utils/cache/catcache.c
+@@ -1463,6 +1463,9 @@ SearchCatCacheInternal(CatCache *cache,
+ 			ct->refcount++;
+ 			ResourceOwnerRememberCatCacheRef(CurrentResourceOwner, &ct->tuple);
+ 
++		/* DEBUG DIPLOMA: catcache hit */
++		elog(NOTICE, "[CATCACHE HIT] %s", cache->cc_relname);
++
+ 			CACHE_elog(DEBUG2, "SearchCatCache(%s): found in bucket %d",
+ 					   cache->cc_relname, hashIndex);
+ 
+@@ -1474,6 +1477,9 @@ SearchCatCacheInternal(CatCache *cache,
+ 		}
+ 		else
+ 		{
++			/* DEBUG DIPLOMA: catcache negative hit */
++			elog(NOTICE, "[CATCACHE NEG-HIT] %s (tuple does not exist)", cache->cc_relname);
++
+ 			CACHE_elog(DEBUG2, "SearchCatCache(%s): found neg entry in bucket %d",
+ 					   cache->cc_relname, hashIndex);
+ 
+@@ -1485,6 +1491,9 @@ SearchCatCacheInternal(CatCache *cache,
+ 		}
+ 	}
+ 
++	/* DEBUG DIPLOMA: catcache miss */
++	elog(NOTICE, "[CATCACHE MISS] %s -> will read from disk", cache->cc_relname);
++
+ 	return SearchCatCacheMiss(cache, nkeys, hashValue, hashIndex, v1, v2, v3, v4);
+ }
+ 
