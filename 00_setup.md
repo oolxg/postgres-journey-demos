@@ -95,6 +95,35 @@ SELECT 'zipcode', level, root, fastroot FROM bt_metap('person_zipcode_idx');
 
 Both at `level = 1` (root + leaves). No internal pages yet — the root fits all leaf-level separators in one page.
 
+## Why 10000 rows
+
+The size is not arbitrary. Below roughly a thousand rows the structures this kit inspects do not exist yet. Same schema, same populator formulas, three sizes:
+
+```sql
+-- repeated for n in (100, 1000, 10000) against a probe copy of the schema
+SELECT pg_relation_size('probe')/8192        AS heap_pages,
+       pg_relation_size('probe_pkey')/8192   AS pkey_pages,
+       (SELECT level FROM bt_metap('probe_pkey'))    AS pkey_level,
+       pg_relation_size('probe_zip_idx')/8192 AS zip_pages,
+       (SELECT level FROM bt_metap('probe_zip_idx')) AS zip_level;
+```
+
+```
+  rows | heap_pages | pkey_pages | pkey_level | zip_pages | zip_level | posting_tuples | max_itemlen
+-------+------------+------------+------------+-----------+-----------+----------------+-------------
+   100 |          1 |          2 |          0 |         2 |         0 |              0 |          16
+  1000 |          8 |          5 |          1 |         4 |         1 |            100 |          80
+ 10000 |         74 |         30 |          1 |        11 |         1 |            100 |         616
+```
+
+Three things only appear at the larger size:
+
+- **A tree at all.** At 100 rows both indexes report `level = 0`: the root *is* the only leaf. There are no internal pages, no descent, no high keys, no right-links, and a page split cannot happen. Demos 13 and 14 would have nothing to show.
+- **A heap worth scanning.** At 100 rows the heap is a single page, so Seq Scan, Index Scan and Bitmap Heap Scan all cost one page fetch and the plan comparison of Demos 01-03 is meaningless. At 10000 rows the heap is 74 pages and the 100 rows matching one zipcode are spread across all of them, which is what makes the bitmap reorder pay off.
+- **Duplicates to merge.** `zipcode = 10000 + (g % 100)` gives `n / 100` rows per key. At `n = 100` every zipcode occurs exactly once, so there is nothing to deduplicate and `posting_tuples` is 0. At `n = 1000` posting tuples appear but hold ~10 TIDs each (80 bytes) and save only one index page. At `n = 10000` each holds ~100 TIDs (616 bytes) and the index drops from 30 pages to 11.
+
+10000 is the smallest round size where all three hold at once, while the whole database still fits in a few hundred KB and every demo runs in milliseconds.
+
 ## Inside a btree leaf
 
 ```sql
@@ -114,6 +143,27 @@ LIMIT 5;
 ```
 
 Items 2 and 5 are **posting tuples**: 608 / 616 bytes ≈ 1 key + ~100 TIDs (each TID = 6 bytes). Their `ctid` is the encoded posting-list header, not a real heap location (note the high offsets 8290/8291). Items 1, 3, 4 are regular 16-byte entries with one TID each — stragglers from inserts that arrived after the last dedup pass, or singletons that didn't trigger a pass.
+
+The `tids` column is non-null only for posting tuples, so it separates the two shapes and counts what each one holds:
+
+```sql
+SELECT itemoffset, itemlen, array_length(tids,1) AS n_tids, (tids)[1:5]::text AS first_5_tids
+FROM bt_page_items('person_zipcode_idx', 1) LIMIT 5;
+```
+
+```
+ itemoffset | itemlen | n_tids |                   first_5_tids
+------------+---------+--------+--------------------------------------------------
+          1 |      16 |        |
+          2 |     608 |     98 | {"(0,100)","(1,64)","(2,28)","(2,128)","(3,92)"}
+          3 |      16 |        |
+          4 |      16 |        |
+          5 |     616 |     99 | {"(0,1)","(0,101)","(1,65)","(2,29)","(2,129)"}
+```
+
+This is the arithmetic behind the straggler claim. Key `'10000'` is assigned whenever `g % 100 = 0`, so it has exactly 100 rows. Its posting tuple (item 2) holds **98** of them, and items 3 and 4 are the other two, still unmerged: 98 + 2 = 100. Item 5 is the key `'10001'` with 99 of its 100 TIDs merged.
+
+Note the filter shape: adding `WHERE itemoffset IN (2,5)` to this query raises `could not open relation with OID 0` on the instrumented build (see README) — hence `LIMIT 5` instead.
 
 Dedup is **opportunistic, not eager** — `_bt_dedup_pass` runs only when a leaf is about to split and adjacent duplicates exist. So a leaf in steady state is a mix of posting tuples (from past dedup passes) and plain entries (stragglers since the last pass).
 

@@ -97,4 +97,4 @@ Any DML on the page clears both VM bits. VACUUM sets them lazily (and freezes wh
 
 ---
 
-← Previous: [13_page_split.md](13_page_split.md) | Back to [README](README.md)
+← Previous: [13_page_split.md](13_page_split.md) | Next: [15_deduplication_control.md](15_deduplication_control.md) →

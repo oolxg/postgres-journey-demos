@@ -44,6 +44,7 @@ Each demo file is self-contained: prose context, the SQL to run, the captured ou
 | 12 | [12_bottom_up_deletion.md](12_bottom_up_deletion.md) | §4.5.2 | Bottom-up deletion (PG14+) |
 | 13 | [13_page_split.md](13_page_split.md) | §4.3.7, §4.4.7 | Page split, Lehman-Yao right-links |
 | 14 | [14_index_only_scan.md](14_index_only_scan.md) | §4.3.6 | Index-Only Scan via VM, `Heap Fetches: 0` |
+| 15 | [15_deduplication_control.md](15_deduplication_control.md) | §4.4.8 | Controlling dedup: incremental vs REINDEX vs off |
 
 ## Run order
 
