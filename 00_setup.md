@@ -122,48 +122,43 @@ Three things only appear at the larger size:
 - **A heap worth scanning.** At 100 rows the heap is a single page, so Seq Scan, Index Scan and Bitmap Heap Scan all cost one page fetch and the plan comparison of Demos 01-03 is meaningless. At 10000 rows the heap is 74 pages and the 100 rows matching one zipcode are spread across all of them, which is what makes the bitmap reorder pay off.
 - **Duplicates to merge.** `zipcode = 10000 + (g % 100)` gives `n / 100` rows per key. At `n = 100` every zipcode occurs exactly once, so there is nothing to deduplicate and `posting_tuples` is 0. At `n = 1000` posting tuples appear but hold ~10 TIDs each (80 bytes) and save only one index page. At `n = 10000` each holds ~100 TIDs (616 bytes) and the index drops from 30 pages to 11.
 
-10000 is the smallest round size where all three hold at once, while the whole database still fits in a few hundred KB and every demo runs in milliseconds.
+10000 is the smallest round size where all three hold at once. Going much higher costs more than it buys: the three relations already occupy 920 KB, the whole workload rebuilds in about a second, and every demo runs in milliseconds, while a dump of one index leaf still fits on a screen. A hundred thousand rows would change none of the mechanisms.
+
+Where a mechanism really does need more rows, the demo that needs them adds them: the primary key only reaches tree level 2 after roughly 200000 further inserts, which is what Demo 13 does.
 
 ## Inside a btree leaf
 
+`bt_page_items` returns the raw bytes of each index entry in a `data` column. That column is a hex dump, because the function works on any index over any type and cannot know how to print an arbitrary key. For a `text` key the bytes are a one-byte length header followed by the characters, so the query below decodes them back into the zipcode:
+
 ```sql
-SELECT itemoffset, ctid, itemlen, substring(data for 20) AS data_first20
+SELECT itemoffset,
+       itemlen,
+       coalesce(array_length(tids, 1), 1)                     AS row_pointers,
+       convert_from(decode(replace(substring(data from 4 for 14), ' ', ''),
+                           'hex'), 'UTF8')                    AS zipcode
 FROM bt_page_items('person_zipcode_idx', 1)
 LIMIT 5;
 ```
 
 ```
- itemoffset |   ctid    | itemlen |        data_first20
-------------+-----------+---------+-------------------------
-          1 | (16,1)    |      16 | 0d 31 30 30 31 31 00
-          2 | (16,8290) |     608 | 0d 31 30 30 30 30 00
-          3 | (72,108)  |      16 | 0d 31 30 30 30 30 00
-          4 | (73,72)   |      16 | 0d 31 30 30 30 30 00
-          5 | (16,8291) |     616 | 0d 31 30 30 30 31 00
+ itemoffset | itemlen | row_pointers | zipcode 
+------------+---------+--------------+---------
+          1 |      16 |            1 | 10011
+          2 |     608 |           98 | 10000
+          3 |      16 |            1 | 10000
+          4 |      16 |            1 | 10000
+          5 |     616 |           99 | 10001
 ```
 
-Items 2 and 5 are **posting tuples**: 608 / 616 bytes ≈ 1 key + ~100 TIDs (each TID = 6 bytes). Their `ctid` is the encoded posting-list header, not a real heap location (note the high offsets 8290/8291). Items 1, 3, 4 are regular 16-byte entries with one TID each — stragglers from inserts that arrived after the last dedup pass, or singletons that didn't trigger a pass.
+Read it by column. `itemlen` is the size of the entry. `row_pointers` is how many table rows the entry points at. `zipcode` is the decoded key.
 
-The `tids` column is non-null only for posting tuples, so it separates the two shapes and counts what each one holds:
+Two shapes are visible. Items 2 and 5 are **posting tuples**: one key, 98 and 99 row pointers, 608 and 616 bytes. Items 1, 3 and 4 are plain entries: one key, one row pointer, 16 bytes.
 
-```sql
-SELECT itemoffset, itemlen, array_length(tids,1) AS n_tids, (tids)[1:5]::text AS first_5_tids
-FROM bt_page_items('person_zipcode_idx', 1) LIMIT 5;
-```
+Items 2, 3 and 4 all hold the key `10000`. That key is assigned whenever `g % 100 = 0`, so 100 rows carry it. The posting tuple holds 98 of them and the two plain entries hold the last two: 98 + 2 = 100. Those two arrived after the last dedup pass on this leaf and wait for the next one.
 
-```
- itemoffset | itemlen | n_tids |                   first_5_tids
-------------+---------+--------+--------------------------------------------------
-          1 |      16 |        |
-          2 |     608 |     98 | {"(0,100)","(1,64)","(2,28)","(2,128)","(3,92)"}
-          3 |      16 |        |
-          4 |      16 |        |
-          5 |     616 |     99 | {"(0,1)","(0,101)","(1,65)","(2,29)","(2,129)"}
-```
+Item 1 is the page **high key**, the upper bound on keys that belong here. Page 1 is not the rightmost leaf, so it stores one.
 
-This is the arithmetic behind the straggler claim. Key `'10000'` is assigned whenever `g % 100 = 0`, so it has exactly 100 rows. Its posting tuple (item 2) holds **98** of them, and items 3 and 4 are the other two, still unmerged: 98 + 2 = 100. Item 5 is the key `'10001'` with 99 of its 100 TIDs merged.
-
-Note the filter shape: adding `WHERE itemoffset IN (2,5)` to this query raises `could not open relation with OID 0` on the instrumented build (see README) — hence `LIMIT 5` instead.
+Two notes on the query. The `tids` column is null for a plain entry, which is why `coalesce` maps it to 1. And adding `WHERE itemoffset IN (2,5)` raises `could not open relation with OID 0` on the instrumented build (see README), so the query uses `LIMIT 5` instead.
 
 Dedup is **opportunistic, not eager** — `_bt_dedup_pass` runs only when a leaf is about to split and adjacent duplicates exist. So a leaf in steady state is a mix of posting tuples (from past dedup passes) and plain entries (stragglers since the last pass).
 
