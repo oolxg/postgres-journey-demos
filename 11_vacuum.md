@@ -96,6 +96,141 @@ Rerun the same `pgstattuple` + `pg_visibility_map` queries:
 
 The visibility map now reports **all 74 pages** as all-visible. Subsequent Index-Only Scans on `person` can answer queries from the index alone, skipping heap fetches entirely (Demo 14).
 
+## Where the freed space goes
+
+VACUUM does not shrink the table. After it frees a page's line pointers it records the
+page's new free space in the free-space map (`vacuumlazy.c:2801`), and that is the map an
+INSERT asks first (Demo 06). Rerunning Demo 06's 1000-row insert on a half-deleted table
+shows the difference VACUUM makes. Both arms start from a fresh `00_setup` with
+`autovacuum_enabled = off`, so nothing vacuums behind our back.
+
+```sql
+DELETE FROM person WHERE id % 2 = 0;        -- 5000 dead rows on every page
+VACUUM person;                              -- ONLY in the second arm
+
+-- run the insert from a NEW session: a backend caches its last target block
+-- (hio.c:576) and only asks the FSM when it has none (hio.c:584)
+INSERT INTO person SELECT g, 'Filler_' || g, (10000 + g % 100)::text, (20 + g % 60)::smallint
+FROM generate_series(11001, 12000) g;
+
+SELECT pg_relation_size('person') / 8192 AS heap_pages;
+SELECT min((ctid::text::point)[0])::int AS min_blk,
+       max((ctid::text::point)[0])::int AS max_blk,
+       count(*) FILTER (WHERE (ctid::text::point)[0] < 74) AS on_old_pages
+FROM person WHERE id > 11000;
+```
+
+Arm 1 — DELETE, **no** VACUUM, then the insert:
+
+```
+ heap_pages 
+------------
+         81
+(1 row)
+
+ min_blk | max_blk | on_old_pages 
+---------+---------+--------------
+      73 |      80 |           64
+(1 row)
+```
+
+Arm 2 — DELETE, **VACUUM**, then the insert:
+
+```
+ heap_pages 
+------------
+         74
+(1 row)
+
+ min_blk | max_blk | on_old_pages 
+---------+---------+--------------
+       0 |      14 |         1000
+(1 row)
+```
+
+Without VACUUM the dead rows still hold their slots, the FSM knows nothing, and the heap
+grows by the same seven pages as in Demo 06 (the 64 rows that fit went to page 73, which
+had room from the start). With VACUUM every new row lands in blocks 0-14, in the space the
+DELETE left at the front of the file. Identical across three runs.
+
+## VACUUM vs VACUUM FULL
+
+Same half-deleted table, sizes in pages and the file each relation lives in:
+
+```sql
+SELECT relname, relfilenode, pg_relation_size(oid) / 8192 AS pages
+FROM pg_class WHERE relname IN ('person','person_pkey','person_zipcode_idx')
+ORDER BY relname;
+```
+
+After `00_setup`:
+
+```
+      relname       | relfilenode | pages 
+--------------------+-------------+-------
+ person             |       25954 |    74
+ person_pkey        |       25963 |    30
+ person_zipcode_idx |       25965 |    11
+(3 rows)
+```
+
+After `DELETE FROM person WHERE id % 2 = 0; VACUUM person;` — same files, same sizes:
+
+```
+      relname       | relfilenode | pages 
+--------------------+-------------+-------
+ person             |       25954 |    74
+ person_pkey        |       25963 |    30
+ person_zipcode_idx |       25965 |    11
+(3 rows)
+```
+
+After `VACUUM FULL person;` — three new files, all smaller:
+
+```
+      relname       | relfilenode | pages 
+--------------------+-------------+-------
+ person             |       25966 |    37
+ person_pkey        |       25971 |    16
+ person_zipcode_idx |       25972 |     7
+(3 rows)
+```
+
+(relfilenode values differ per run; what matters is that plain VACUUM keeps them and
+FULL replaces all three.) FULL is a variant of CLUSTER (`vacuum.c:2302`): it copies the
+live rows into a new file and rebuilds every index.
+
+The cost is the lock. `vacuum.c:2084` picks `ShareUpdateExclusiveLock` for plain VACUUM
+and `AccessExclusiveLock` for FULL. With a reader holding a transaction open:
+
+```sql
+-- session A: an ordinary reader keeping its transaction open
+BEGIN; SELECT count(*) FROM person; SELECT pg_sleep(6); COMMIT;
+
+-- session B, while A sleeps
+SET lock_timeout = '1s';
+\timing on
+VACUUM person;
+VACUUM FULL person;
+```
+
+Session B output:
+
+```
+SET
+Timing is on.
+VACUUM
+Time: 1.976 ms
+ERROR:  canceling statement due to lock timeout
+Time: 1002.368 ms (00:01.002)
+```
+
+(The `psql:<file>:4:` prefix that `psql -f` puts before the error line is omitted, since it
+only names the local script file. `pg_locks` would show the two lock modes directly, but on the instrumented build the view
+trips the known `could not open relation with OID 0` quirk, so it is not captured here.)
+
+Plain VACUUM runs alongside readers and writers. FULL waits for everyone to leave.
+
 ## Source path
 
 - `src/backend/commands/vacuum.c:vacuum`
@@ -104,8 +239,10 @@ The visibility map now reports **all 74 pages** as all-visible. Subsequent Index
   - → `lazy_vacuum_all_indexes`
     - → `src/backend/access/index/indexam.c:index_bulk_delete`
     - → `src/backend/access/nbtree/nbtree.c:btbulkdelete` (per-index callback for btree)
-  - → `lazy_vacuum_heap_rel` (reclaim heap line pointers)
+  - → `lazy_vacuum_heap_rel` (reclaim heap line pointers, then `RecordPageWithFreeSpace` at line 2801)
   - → `visibilitymap_set` (mark page all_visible, possibly all_frozen)
+- VACUUM FULL: `vacuum.c:2084` (lock choice) → `vacuum.c:2302` `cluster_rel` (rewrite into a new relfilenode)
+- INSERT side: `src/backend/access/heap/hio.c:576` (cached target block) → `hio.c:584` `GetPageWithFreeSpace`
 
 ---
 
