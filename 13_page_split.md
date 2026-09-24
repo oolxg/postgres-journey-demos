@@ -131,6 +131,8 @@ Internal-page items map: `(3,0)` — leftmost, no key (everything below the firs
 
 ## Why right-links matter — Lehman-Yao read with concurrent split
 
+*Illustration with simplified round keys, not a capture: a real pkey leaf holds a few hundred keys, not tens of thousands.*
+
 A reader R is descending the tree to find key 175000. It pinned leaf L (which holds keys 144800..200000). Before R reads it, a writer W splits L into L (keeps 144800..172000) and L' (gets 172001..200000), updating the parent atomically.
 
 ```

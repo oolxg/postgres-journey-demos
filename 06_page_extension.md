@@ -50,7 +50,7 @@ ORDER BY 1, 2;
  Transaction      | COMMIT        |    1
 ```
 
-Heap grew by 7 pages (74 → 81); the WAL trail shows 7 `Heap / INSERT+INIT` records, one per page extension. `INSERT+INIT` is `XLOG_HEAP_INSERT` with the `XLOG_HEAP_INIT_PAGE` flag set: `PageInit` zeroes the new page header before the first tuple goes in, both written in a single WAL record. Plain `INSERT` records (993 of them) cover rows that fit pages already in the file.
+Heap grew by 7 pages (74 → 81); the WAL trail shows 7 `Heap / INSERT+INIT` records, one per page extension. `INSERT+INIT` is `XLOG_HEAP_INSERT` with the `XLOG_HEAP_INIT_PAGE` flag set: `PageInit` zeroes the new page header before the first tuple goes in, both written in a single WAL record. Plain `INSERT` records (993 of them) cover every other row: the ones that still fit on page 73, and every row after the first on each new page.
 
 The btree side reacted too: 1997 `INSERT_LEAF` (≈ 2 indexes × 1000 rows minus the 3 tuples inserted by `_bt_split` itself, because a split logs `SPLIT_L`/`SPLIT_R` instead of a separate `INSERT_LEAF`), 28 `DEDUP` passes on `person_zipcode_idx` that reclaimed space and postponed further splits, three leaf splits (`SPLIT_L`/`SPLIT_R`) and three resulting `INSERT_UPPER` records propagating new separators upward. Heap extension and index growth are independent. Each AM extends its own files through the buffer manager's `ExtendBufferedRel(By)` family (heap calls `ExtendBufferedRelBy` directly from `RelationAddBlocks`; btree calls the singular `ExtendBufferedRel` wrapper from `_bt_allocbuf`, which forwards to `ExtendBufferedRelBy` with `extend_by=1`).
 

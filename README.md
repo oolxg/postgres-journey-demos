@@ -33,7 +33,7 @@ Each demo file is self-contained: prose context, the SQL to run, the captured ou
 | 03 | [03_seq_scan_baseline.md](03_seq_scan_baseline.md) | §4.3.2, §4.3.3 | Seq Scan baseline (no index on `age`) |
 | 04 | [04_buffer_pool_walkthrough.md](04_buffer_pool_walkthrough.md) | §4.3.4 | Buffer pool contents via `pg_buffercache` |
 | 04b | [04b_cold_cache.md](04b_cold_cache.md) | §4.3.5 | Server restart, cold→warm cache, 7× speedup |
-| 05 | [05_insert_wal_trail.md](05_insert_wal_trail.md) | §4.4.1 | INSERT WAL trail (6 records per row) |
+| 05 | [05_insert_wal_trail.md](05_insert_wal_trail.md) | §4.4.1 | INSERT WAL trail (4 records per row) |
 | 06 | [06_page_extension.md](06_page_extension.md) | §4.4.2 | Page extension when heap is full |
 | 07 | [07_hot_update.md](07_hot_update.md) | §4.4.3 | HOT UPDATE (skips indexes) |
 | 08 | [08_non_hot_update.md](08_non_hot_update.md) | §4.4.4 | non-HOT UPDATE (per-index entry) |

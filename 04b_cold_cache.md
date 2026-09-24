@@ -63,7 +63,7 @@ SELECT name FROM person WHERE zipcode = '10063';
  Execution Time: 1.978 ms
 ```
 
-Note `shared read=76` and `read=2` — the executor pulled 78 pages from disk. Planning hit 82 pages from cache (catalog pages partially survive as they were loaded by the connection's startup) plus 12 read from disk.
+Note `shared read=76` and `read=2` — the parent node's 76 already include the child's 2, so the executor read 76 pages from outside shared buffers. The two index metapages were read during planning, which gives the 78 relation pages of Demo 04. Planning hit 82 pages from cache (catalog pages partially survive as they were loaded by the connection's startup) plus 12 read from disk.
 
 Buffer pool after the cold query (extended to show block numbers):
 
@@ -106,7 +106,7 @@ SELECT name FROM person WHERE zipcode = '10063';
  Execution Time: 0.290 ms                        <-- 1.978 ms -> 0.290 ms
 ```
 
-All `shared hit`, no `read`. Cold-to-warm speedup: **execution 7x faster, planning 27x faster** for this query. The cold cost is dominated by 78 disk reads at ~20 µs each, totalling ~1.5 ms — roughly the gap.
+All `shared hit`, no `read`. Cold-to-warm speedup: **execution 7x faster, planning 27x faster** for this query. The cold cost is dominated by 78 reads from outside shared buffers at ~20 µs each, totalling ~1.5 ms — roughly the gap. A restart does not empty the OS page cache, so at that speed the reads most likely came from kernel memory, not from the device.
 
 This is the main reason production deployments often use `pg_prewarm` after a restart, or run a known-large query once to populate the pool, before letting real traffic in.
 

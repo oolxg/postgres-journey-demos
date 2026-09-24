@@ -24,7 +24,7 @@ SELECT name, zipcode FROM person WHERE id = 5000;
  Execution Time: 0.083 ms
 ```
 
-`hit=6` is higher than the apparent 3 unique pages (root + leaf + heap): EXPLAIN BUFFERS counts every `ReadBuffer` call, including re-pins across the `index_beginscan` / `index_getnext_tid` / `index_fetch_heap` boundary.
+`hit=6` is higher than the 3 pages the lookup needs (root + leaf + heap). This demo does not attribute the other 3. The range scan below runs next in the same session (no `Planning:` buffers, so the catalog cache is warm) and touches only 3, which suggests a one-time cost of the first execution, not a per-fetch effect.
 
 ## Range scan
 
